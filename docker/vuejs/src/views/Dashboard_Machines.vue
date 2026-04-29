@@ -51,19 +51,36 @@
           <th class="p-4">Device</th>
           <th class="p-4">Status</th>
           <th class="p-4 w-40">Stock</th>
+          <th class="p-4">Payment Link</th>
           <th class="p-4">Actions</th>
-        </tr>
-      </thead>
+          </tr>
+          </thead>
 
-      <tbody>
+          <tbody>
 
-        <tr
+          <tr
           v-for="machine in machines"
           :key="machine.id"
           class="border-t hover:bg-gray-50"
-        >
+          >
+          ...
+          <td class="p-4">
+            <div class="flex items-center gap-2">
+              <code class="bg-gray-50 px-2 py-1 rounded text-[10px] border border-gray-100 max-w-[150px] truncate">
+                https://vmflow.xyz/pay/{{ machine.id }}
+              </code>
+              <button 
+                @click="copyPaymentLink(machine.id)" 
+                title="Copy Link"
+                class="hover:text-blue-600"
+              >
+                📋
+              </button>
+            </div>
+          </td>
 
-          <td class="p-4 font-medium text-gray-700">
+          <td class="p-4 space-x-2">
+
             {{ machine.name }}
           </td>
 
@@ -976,6 +993,12 @@ export default {
     showToast(message) {
       this.toast = message
       setTimeout(() => { this.toast = null }, 3000)
+    },
+
+    copyPaymentLink(id) {
+      const url = `https://vmflow.xyz/pay/${id}`
+      navigator.clipboard.writeText(url)
+      this.showToast('Payment link copied!')
     },
 
     async openModelDialog(machine) {

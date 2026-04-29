@@ -31,7 +31,14 @@ async function verifyJWT(jwt: string): Promise<boolean> {
 }
 
 serve(async (req: Request) => {
-  if (req.method !== 'OPTIONS' && VERIFY_JWT) {
+  const url = new URL(req.url)
+  const { pathname } = url
+  const path_parts = pathname.split('/')
+  const service_name = path_parts[1]
+
+  const isPublicPath = service_name === 'stripe-webhook' || service_name === 'create-checkout-session'
+
+  if (req.method !== 'OPTIONS' && VERIFY_JWT && !isPublicPath) {
     try {
       const token = getAuthToken(req)
       const isValidJWT = await verifyJWT(token)

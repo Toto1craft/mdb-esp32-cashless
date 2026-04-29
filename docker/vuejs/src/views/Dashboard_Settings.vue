@@ -50,17 +50,59 @@
 
     <h2 class="font-semibold text-gray-700">API Keys</h2>
 
-    <div>
-      <label class="block text-sm text-gray-600 mb-1">OpenAI API Key</label>
-      <input
-        v-model="claudeApiKey"
-        type="password"
-        placeholder="sk-..."
-        class="w-full border rounded p-2 text-sm font-mono"
-      />
-      <p class="text-xs text-gray-400 mt-1">
-        Used to generate AI insights per machine. Stored securely per account.
-      </p>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">OpenAI API Key</label>
+        <input
+          v-model="claudeApiKey"
+          type="password"
+          placeholder="sk-..."
+          class="w-full border rounded p-2 text-sm font-mono"
+        />
+        <p class="text-xs text-gray-400 mt-1">
+          Used to generate AI insights per machine.
+        </p>
+      </div>
+
+      <div>
+        <div class="flex items-center gap-2 mb-1">
+          <label class="block text-sm text-gray-600 font-medium">Stripe Secret Key</label>
+          <div class="group relative">
+            <span class="cursor-help text-slate-400 bg-slate-100 rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold">?</span>
+            <div class="invisible group-hover:visible absolute left-full ml-2 top-0 w-64 p-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl z-50 leading-relaxed">
+              Found in Stripe Dashboard > Developers > API keys. 
+              Always use the <b>Secret Key (sk_...)</b>. 
+              This allows the system to create payment sessions on your behalf.
+            </div>
+          </div>
+        </div>
+        <input
+          v-model="stripeSecretKey"
+          type="password"
+          placeholder="sk_live_..."
+          class="w-full border rounded p-2 text-sm font-mono"
+        />
+      </div>
+
+      <div>
+        <div class="flex items-center gap-2 mb-1">
+          <label class="block text-sm text-gray-600 font-medium">Stripe Webhook Secret</label>
+          <div class="group relative">
+            <span class="cursor-help text-slate-400 bg-slate-100 rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold">?</span>
+            <div class="invisible group-hover:visible absolute left-full ml-2 top-0 w-64 p-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl z-50 leading-relaxed">
+              Found in Stripe Dashboard > Developers > Webhooks. 
+              Add an endpoint pointing to: <code>https://supabase.vmflow.xyz/functions/v1/stripe-webhook</code>. 
+              Listen for the <b>checkout.session.completed</b> event.
+            </div>
+          </div>
+        </div>
+        <input
+          v-model="stripeWebhookSecret"
+          type="password"
+          placeholder="whsec_..."
+          class="w-full border rounded p-2 text-sm font-mono"
+        />
+      </div>
     </div>
 
     <p v-if="apiKeyError" class="text-sm text-red-500">{{ apiKeyError }}</p>
@@ -68,7 +110,7 @@
 
     <div class="flex justify-end">
       <button
-        @click="saveApiKey"
+        @click="saveApiKeys"
         :disabled="savingApiKey"
         class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-sm rounded transition disabled:opacity-40"
       >
@@ -134,45 +176,53 @@ function saveThreshold() {
 }
 
 const claudeApiKey = ref('')
+const stripeSecretKey = ref('')
+const stripeWebhookSecret = ref('')
 const savingApiKey = ref(false)
 const apiKeyError = ref('')
 const apiKeySuccess = ref('')
 
-async function loadApiKey() {
+async function loadApiKeys() {
   const { data } = await supabase
     .from('credentials')
-    .select('value')
-    .eq('key', 'openai_api_key')
-    .maybeSingle()
+    .select('key, value')
+    .in('key', ['openai_api_key', 'stripe_secret_key', 'stripe_webhook_secret'])
 
-  if (data) claudeApiKey.value = data.value
+  if (data) {
+    data.forEach(item => {
+      if (item.key === 'openai_api_key') claudeApiKey.value = item.value
+      if (item.key === 'stripe_secret_key') stripeSecretKey.value = item.value
+      if (item.key === 'stripe_webhook_secret') stripeWebhookSecret.value = item.value
+    })
+  }
 }
 
-async function saveApiKey() {
+async function saveApiKeys() {
   apiKeyError.value = ''
   apiKeySuccess.value = ''
 
-  if (!claudeApiKey.value.trim()) {
-    apiKeyError.value = 'API key cannot be empty.'
-    return
-  }
-
   savingApiKey.value = true
+
+  const keysToSave = [
+    { key: 'openai_api_key', value: claudeApiKey.value.trim() },
+    { key: 'stripe_secret_key', value: stripeSecretKey.value.trim() },
+    { key: 'stripe_webhook_secret', value: stripeWebhookSecret.value.trim() }
+  ].filter(k => k.value)
 
   const { error } = await supabase
     .from('credentials')
-    .upsert({ key: 'openai_api_key', value: claudeApiKey.value.trim() }, { onConflict: 'owner_id,key' })
+    .upsert(keysToSave, { onConflict: 'owner_id,key' })
 
   savingApiKey.value = false
 
   if (error) {
     apiKeyError.value = error.message
   } else {
-    apiKeySuccess.value = 'API key saved.'
+    apiKeySuccess.value = 'API keys saved.'
   }
 }
 
-loadApiKey()
+loadApiKeys()
 
 const newPassword = ref('')
 const confirmPassword = ref('')
