@@ -1,6 +1,7 @@
 // deno run --allow-net index.ts
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import { decodeBase64, encodeBase64 } from 'jsr:@std/encoding/base64'
+import { encodePayloadWithXOR, decodePayloadWithXOR } from '../_shared/vmflow-payload.ts';
 
 function toScaleFactor(p: number, x: number, y: number): number {
   return p / x / Math.pow(10, -y);
@@ -21,46 +22,32 @@ Deno.serve(async (req) => {
             { global: { headers: { Authorization: req.headers.get('Authorization')! } } }
         )
 
-        const { data: embeddedData, error } = await supabase.from("embedded").select("passkey,subdomain,id,machine_id").eq("subdomain", body.subdomain);
+        const { data: embeddedData, error: embeddedError } = await supabase.from("embedded").select("passkey,subdomain,id,machine_id").eq("subdomain", body.subdomain);
 
-        const passkey: number[] = [...embeddedData[0].passkey].map(c => c.charCodeAt(0));
+        const decodedPayload = decodePayloadWithXOR(embeddedData[0].passkey, payload);
 
-        for(let k= 0; k < passkey.length; k++){
-            payload[k + 1] ^= passkey[k];
-        }
-        let chk = payload.slice(0, -1).reduce((acc, val) => acc + val, 0);
+        const itemPrice =
+            (decodedPayload[1] << 24) |
+            (decodedPayload[2] << 16) |
+            (decodedPayload[3] << 8) |
+            (decodedPayload[4] << 0);
 
-        if( payload[payload.length - 1] == (chk & 0xff) ){
+        const itemNumber = (decodedPayload[5] << 8) | (decodedPayload[6] << 0);
 
-            const itemPrice =
-                (payload[1] << 24) |
-                (payload[2] << 16) |
-                (payload[3] << 8) |
-                (payload[4] << 0);
-            const itemNumber = (payload[5] << 8) | (payload[6] << 0);
+        const { data: saleData, error: salesError } = await supabase.from("sales").insert([{
+            embedded_id: embeddedData[0].id,
+            machine_id:  embeddedData[0].machine_id ?? null,
+            item_number: itemNumber,
+            item_price:  fromScaleFactor(itemPrice, 1, 2),
+            channel:     "ble",
+            lat:         (body.lat !== undefined ? body.lat : null),
+            lng:         (body.lng !== undefined ? body.lng : null) }]).select("id").single()
 
-	        const { data: saleData, error } = await supabase.from("sales").insert([{
-            	embedded_id: embeddedData[0].id,
-            	machine_id:  embeddedData[0].machine_id ?? null,
-            	item_number: itemNumber,
-            	item_price:  fromScaleFactor(itemPrice, 1, 2),
-            	channel:     "ble",
-            	lat:         (body.lat !== undefined ? body.lat : null),
-		        lng:         (body.lng !== undefined ? body.lng : null) }]).select("id").single()
+        decodedPayload[0] = 0x03;   // cmd
 
-            payload[0] = 0x03;
+        const encodedPayload = encodePayloadWithXOR(embeddedData[0].passkey, decodedPayload);
 
-            let chk_ = payload.slice(0, -1).reduce((acc, val) => acc + val, 0);
-            payload[payload.length - 1] = chk_;
-
-            for(let k= 0; k < passkey.length; k++){
-                payload[k + 1] ^= passkey[k];
-            }
-
-            return new Response(JSON.stringify({payload: encodeBase64(payload), sales_id: saleData.id}), { headers: { 'Content-Type': 'application/json' } })
-
-        }
-        return new Response(JSON.stringify({ }), { headers: { 'Content-Type': 'application/json' } })
+        return new Response(JSON.stringify({payload: encodeBase64(encodedPayload), sales_id: saleData.id}), { headers: { 'Content-Type': 'application/json' } })
 
     } catch (err) {
         return new Response(JSON.stringify({ message: err?.message ?? err }), {

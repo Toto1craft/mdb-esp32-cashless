@@ -710,6 +710,55 @@
   </div>
 </div>
 
+<!-- MP QR CODE MODAL -->
+
+<div
+  v-if="showMpQrModal"
+  class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+>
+  <div class="bg-white rounded-xl w-full max-w-sm mx-4 flex flex-col">
+
+    <div class="p-5 border-b flex justify-between items-center">
+      <div>
+        <h2 class="text-lg font-semibold text-gray-800">MP QR Code</h2>
+        <p class="text-sm text-gray-500">{{ mpQrMachineName }}</p>
+      </div>
+      <button @click="showMpQrModal = false" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+    </div>
+
+    <div class="p-6 flex flex-col items-center gap-4">
+
+      <div v-if="mpQrLoading" class="py-8 flex flex-col items-center gap-3 text-gray-500 text-sm">
+        <svg class="animate-spin w-6 h-6" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+        </svg>
+        Generating QR Code...
+      </div>
+
+      <p v-else-if="mpQrError" class="text-red-500 text-sm text-center">{{ mpQrError }}</p>
+
+      <template v-else-if="mpQrSrc">
+        <img :src="mpQrSrc" alt="Mercado Libre QR Code" class="w-56 h-56 object-contain border rounded-lg p-2" />
+        <p class="text-xs text-gray-500 text-center">
+          Imprima e cole na máquina. O cliente escaneia com o app Mercado Libre,
+          digita o valor e paga.
+        </p>
+        <a
+          :href="mpQrSrc"
+          :download="`qr-${mpQrMachineName}.png`"
+          target="_blank"
+          class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-sm rounded transition"
+        >
+          Download QR
+        </a>
+      </template>
+
+    </div>
+
+  </div>
+</div>
+
 <!-- ACTIONS DROPDOWN (fixed to avoid overflow-hidden clipping) -->
 <div
   v-if="openMenuId"
@@ -740,6 +789,10 @@
         @click.stop="openCreditModal(machine); openMenuId = null"
         class="w-full text-left px-4 py-2 text-sm text-green-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
       >Send Credit</button>
+      <button
+        @click.stop="openMpQrModal(machine); openMenuId = null"
+        class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+      >MP QR Code</button>
     </template>
   </template>
 </div>
@@ -806,6 +859,12 @@ export default {
       insightError: '',
       insightAbort: null,
 
+      showMpQrModal: false,
+      mpQrLoading: false,
+      mpQrError: '',
+      mpQrImage: null,
+      mpQrMachineName: '',
+
       showEditModal: false,
       editingMachine: null,
       editMachineName: "",
@@ -821,6 +880,11 @@ export default {
   computed: {
     canShare() {
       return !!navigator.share
+    },
+    mpQrSrc() {
+      if (!this.mpQrImage) return null
+      if (this.mpQrImage.startsWith('http')) return this.mpQrImage
+      return `data:image/png;base64,${this.mpQrImage}`
     }
   },
 
@@ -1466,6 +1530,31 @@ Instructions:
         other:         'bg-slate-100 text-slate-600',
       }
       return map[cat] ?? 'bg-slate-100 text-slate-600'
+    },
+
+    async openMpQrModal(machine) {
+      this.mpQrMachineName = machine.name
+      this.mpQrImage = null
+      this.mpQrError = ''
+      this.mpQrLoading = true
+      this.showMpQrModal = true
+
+      try {
+        const { data, error } = await supabase.functions.invoke('create-mp-pos', {
+          body: { machineId: machine.id }
+        })
+
+        if (error) throw error
+        if (data?.error) throw new Error(data.error)
+
+        this.mpQrImage = data.qr_image ?? data.qr_template
+        if (!this.mpQrImage) throw new Error('QR code not returned by Mercado Libre.')
+      } catch (err) {
+        this.mpQrError = err.message ?? 'Failed to generate QR Code.'
+        console.error('openMpQrModal error:', err)
+      } finally {
+        this.mpQrLoading = false
+      }
     },
 
     async saveCoils() {

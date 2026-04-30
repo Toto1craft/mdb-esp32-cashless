@@ -15,7 +15,22 @@
         <div v-else-if="machineError" class="text-center py-10">
           <div class="text-red-500 text-5xl mb-4">⚠️</div>
           <p class="text-gray-700 font-medium">{{ machineError }}</p>
-          <button @click="window.location.reload()" class="mt-4 text-slate-600 underline">Try again</button>
+          <button @click="reload" class="mt-4 text-slate-600 underline">Try again</button>
+        </div>
+
+        <div v-else-if="paymentSuccess" class="text-center py-10">
+          <div class="text-green-500 text-6xl mb-4">✓</div>
+          <p class="text-gray-800 text-lg font-bold">Payment successful!</p>
+          <p class="text-gray-500 text-sm mt-2">Credit is being sent to the machine.</p>
+          <button @click="resetSuccess" class="mt-6 w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-xl transition-all">
+            Add more credit
+          </button>
+        </div>
+
+        <div v-else-if="paymentCanceled" class="text-center py-10">
+          <div class="text-yellow-500 text-5xl mb-4">✕</div>
+          <p class="text-gray-700 font-medium">Payment canceled.</p>
+          <button @click="resetCanceled" class="mt-4 text-slate-600 underline">Try again</button>
         </div>
 
         <div v-else class="space-y-6">
@@ -57,7 +72,7 @@
           </div>
         </div>
       </div>
-      
+
       <div class="bg-gray-50 px-8 py-4 text-center">
         <p class="text-xs text-gray-400">
           Powered by <strong>VMFlow</strong>. Your payment is secure and encrypted.
@@ -69,10 +84,11 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { supabase } from '@/lib/supabase'
 
 const route = useRoute()
+const router = useRouter()
 const machineId = route.params.machineId
 
 const amount = ref('')
@@ -80,6 +96,22 @@ const machineName = ref('')
 const loadingMachine = ref(true)
 const machineError = ref('')
 const paying = ref(false)
+const paymentSuccess = ref(false)
+const paymentCanceled = ref(false)
+
+function reload() {
+  window.location.reload()
+}
+
+function resetSuccess() {
+  router.replace({ query: {} })
+  paymentSuccess.value = false
+}
+
+function resetCanceled() {
+  router.replace({ query: {} })
+  paymentCanceled.value = false
+}
 
 async function fetchMachine() {
   try {
@@ -88,7 +120,7 @@ async function fetchMachine() {
       .select('name')
       .eq('id', machineId)
       .single()
-    
+
     if (error) throw error
     if (data) machineName.value = data.name
   } catch (err) {
@@ -104,7 +136,6 @@ async function handlePayment() {
   paying.value = true
 
   try {
-    // Call Supabase Function to create Checkout Session
     const { data, error } = await supabase.functions.invoke('create-checkout-session', {
       body: {
         machineId,
@@ -120,12 +151,24 @@ async function handlePayment() {
       throw new Error('Failed to create payment session.')
     }
   } catch (err) {
-    alert('Payment error: ' + (err.message || 'Please try again.'))
+    let message = err.message || 'Please try again.'
+    if (err.context) {
+      try {
+        const body = await err.context.json()
+        if (body?.error) message = body.error
+      } catch {}
+    }
+    alert('Payment error: ' + message)
     paying.value = false
   }
 }
 
 onMounted(() => {
+  if (route.query.success === 'true') {
+    paymentSuccess.value = true
+  } else if (route.query.canceled === 'true') {
+    paymentCanceled.value = true
+  }
   fetchMachine()
 })
 </script>

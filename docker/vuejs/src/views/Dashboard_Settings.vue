@@ -64,6 +64,8 @@
         </p>
       </div>
 
+      <hr class="border-gray-100" />
+
       <div>
         <div class="flex items-center gap-2 mb-1">
           <label class="block text-sm text-gray-600 font-medium">Stripe Secret Key</label>
@@ -90,8 +92,8 @@
           <div class="group relative">
             <span class="cursor-help text-slate-400 bg-slate-100 rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold">?</span>
             <div class="invisible group-hover:visible absolute left-full ml-2 top-0 w-64 p-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl z-50 leading-relaxed">
-              Found in Stripe Dashboard > Developers > Webhooks. 
-              Add an endpoint pointing to: <code>https://supabase.vmflow.xyz/functions/v1/stripe-webhook</code>. 
+              Found in Stripe Dashboard > Developers > Webhooks.
+              Add an endpoint pointing to: <code>https://supabase.vmflow.xyz/functions/v1/stripe-webhook</code>.
               Listen for the <b>checkout.session.completed</b> event.
             </div>
           </div>
@@ -100,6 +102,29 @@
           v-model="stripeWebhookSecret"
           type="password"
           placeholder="whsec_..."
+          class="w-full border rounded p-2 text-sm font-mono"
+        />
+      </div>
+
+      <hr class="border-gray-100" />
+
+      <div>
+        <div class="flex items-center gap-2 mb-1">
+          <label class="block text-sm text-gray-600 font-medium">Mercado Libre Access Token</label>
+          <div class="group relative">
+            <span class="cursor-help text-slate-400 bg-slate-100 rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold">?</span>
+            <div class="invisible group-hover:visible absolute left-full ml-2 top-0 w-64 p-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl z-50 leading-relaxed">
+              Found in Mercado Libre Developers > Your credentials > Production credentials.
+              Use the <b>Access Token (APP_USR-...)</b>.
+              Configure the webhook at: <code>https://supabase.vmflow.xyz/functions/v1/mercadopago-webhook</code>.
+              Topic: <b>merchant_order</b>.
+            </div>
+          </div>
+        </div>
+        <input
+          v-model="mpAccessToken"
+          type="password"
+          placeholder="APP_USR-..."
           class="w-full border rounded p-2 text-sm font-mono"
         />
       </div>
@@ -178,6 +203,7 @@ function saveThreshold() {
 const claudeApiKey = ref('')
 const stripeSecretKey = ref('')
 const stripeWebhookSecret = ref('')
+const mpAccessToken = ref('')
 const savingApiKey = ref(false)
 const apiKeyError = ref('')
 const apiKeySuccess = ref('')
@@ -186,13 +212,14 @@ async function loadApiKeys() {
   const { data } = await supabase
     .from('credentials')
     .select('key, value')
-    .in('key', ['openai_api_key', 'stripe_secret_key', 'stripe_webhook_secret'])
+    .in('key', ['openai_api_key', 'stripe_secret_key', 'stripe_webhook_secret', 'mp_access_token'])
 
   if (data) {
     data.forEach(item => {
       if (item.key === 'openai_api_key') claudeApiKey.value = item.value
       if (item.key === 'stripe_secret_key') stripeSecretKey.value = item.value
       if (item.key === 'stripe_webhook_secret') stripeWebhookSecret.value = item.value
+      if (item.key === 'mp_access_token') mpAccessToken.value = item.value
     })
   }
 }
@@ -206,7 +233,8 @@ async function saveApiKeys() {
   const keysToSave = [
     { key: 'openai_api_key', value: claudeApiKey.value.trim() },
     { key: 'stripe_secret_key', value: stripeSecretKey.value.trim() },
-    { key: 'stripe_webhook_secret', value: stripeWebhookSecret.value.trim() }
+    { key: 'stripe_webhook_secret', value: stripeWebhookSecret.value.trim() },
+    { key: 'mp_access_token', value: mpAccessToken.value.trim() }
   ].filter(k => k.value)
 
   const { error } = await supabase
