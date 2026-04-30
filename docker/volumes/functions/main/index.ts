@@ -36,7 +36,8 @@ serve(async (req: Request) => {
   const path_parts = pathname.split('/')
   const service_name = path_parts[1]
 
-  const isPublicPath = service_name === 'stripe-webhook' || service_name === 'create-checkout-session'
+  const publicPaths = ['webhook-stripe', 'webhook-mp', 'create-checkout-stripe', 'create-checkout-mp']
+  const isPublicPath = publicPaths.includes(service_name)
 
   if (req.method !== 'OPTIONS' && VERIFY_JWT && !isPublicPath) {
     try {
@@ -57,11 +58,6 @@ serve(async (req: Request) => {
       })
     }
   }
-
-  const url = new URL(req.url)
-  const { pathname } = url
-  const path_parts = pathname.split('/')
-  const service_name = path_parts[1]
 
   if (!service_name || service_name === '') {
     const error = { msg: 'missing function name in request' }

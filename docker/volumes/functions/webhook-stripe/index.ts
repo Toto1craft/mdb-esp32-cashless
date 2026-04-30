@@ -1,6 +1,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 import Stripe from 'https://esm.sh/stripe@14.25.0?target=deno'
 import { Client } from 'https://deno.land/x/mqtt/deno/mod.ts'
+import { encodePayloadWithXOR } from '../_shared/vmflow-payload.ts'
 
 Deno.serve(async (req) => {
   const signature = req.headers.get('stripe-signature')
@@ -65,49 +66,39 @@ Deno.serve(async (req) => {
         .single()
 
       if (embeddedData) {
-        const cipher: number[] = [...embeddedData.passkey].map((c) => c.charCodeAt(0))
-        const payload: Uint8Array = new Uint8Array(19)
-        crypto.getRandomValues(payload)
+        const rawPayload = new Uint8Array(19)
+        crypto.getRandomValues(rawPayload)
 
-        const itemPrice = amount * 100 // Scale factor 10^-2
+        const itemPrice    = Math.round(amount * 100)
+        const timestampSec = Math.floor(Date.now() / 1000)
 
-        const timestampSec = Math.floor(new Date().getTime() / 1000)
+        rawPayload[0]  = 0x20
+        rawPayload[1]  = (itemPrice >> 24) & 0xff
+        rawPayload[2]  = (itemPrice >> 16) & 0xff
+        rawPayload[3]  = (itemPrice >> 8)  & 0xff
+        rawPayload[4]  = (itemPrice >> 0)  & 0xff
+        rawPayload[5]  = 0x00
+        rawPayload[6]  = 0x00
+        rawPayload[7]  = (timestampSec >> 24) & 0xff
+        rawPayload[8]  = (timestampSec >> 16) & 0xff
+        rawPayload[9]  = (timestampSec >> 8)  & 0xff
+        rawPayload[10] = (timestampSec >> 0)  & 0xff
 
-        payload[0] = 0x20 // Command for credit
-        payload[1] = (itemPrice >> 24) & 0xff
-        payload[2] = (itemPrice >> 16) & 0xff
-        payload[3] = (itemPrice >> 8) & 0xff
-        payload[4] = (itemPrice >> 0) & 0xff
-        payload[5] = 0x00 // itemNumber
-        payload[6] = 0x00
-        payload[7] = (timestampSec >> 24) & 0xff
-        payload[8] = (timestampSec >> 16) & 0xff
-        payload[9] = (timestampSec >> 8) & 0xff
-        payload[10] = (timestampSec >> 0) & 0xff
+        const encodedPayload = encodePayloadWithXOR(embeddedData.passkey, rawPayload)
 
-        let chk = payload.slice(0, -1).reduce((acc, val) => acc + val, 0)
-        payload[payload.length - 1] = chk
-
-        for (let k = 0; k < cipher.length; k++) {
-          payload[k + 1] ^= cipher[k]
-        }
-
-        // Connect to MQTT
-        const client = new Client({ url: `mqtt://mqtt.vmflow.xyz` })
+        const client = new Client({ url: 'mqtt://mqtt.vmflow.xyz' })
         await client.connect()
-        await client.publish(`${embeddedData.subdomain}.vmflow.xyz/credit`, payload)
+        await client.publish(`${embeddedData.subdomain}.vmflow.xyz/credit`, encodedPayload)
         await client.disconnect()
 
         // 5. Record sale
-        await supabase.from('sales').insert([
-          {
-            embedded_id: embeddedData.id,
-            machine_id: machineId,
-            item_price: amount,
-            channel: 'mqtt',
-            owner_id: operatorId,
-          },
-        ])
+        await supabase.from('sales').insert([{
+          embedded_id: embeddedData.id,
+          machine_id:  machineId,
+          item_price:  amount,
+          channel:     'mqtt',
+          owner_id:    operatorId,
+        }])
       }
     }
 

@@ -66,8 +66,8 @@ Deno.serve(async (req) => {
         },
       ],
       mode: 'payment',
-      success_url: `${req.headers.get('origin')}/pay/${machineId}?success=true`,
-      cancel_url: `${req.headers.get('origin')}/pay/${machineId}?canceled=true`,
+      success_url: `${req.headers.get('origin')}/pay/stripe/${machineId}?success=true`,
+      cancel_url: `${req.headers.get('origin')}/pay/stripe/${machineId}?canceled=true`,
       metadata: {
         machineId,
         operatorId: machine.owner_id,

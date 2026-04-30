@@ -93,7 +93,7 @@
             <span class="cursor-help text-slate-400 bg-slate-100 rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold">?</span>
             <div class="invisible group-hover:visible absolute left-full ml-2 top-0 w-64 p-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl z-50 leading-relaxed">
               Found in Stripe Dashboard > Developers > Webhooks.
-              Add an endpoint pointing to: <code>https://supabase.vmflow.xyz/functions/v1/stripe-webhook</code>.
+              Add an endpoint pointing to: <code>https://supabase.vmflow.xyz/functions/v1/webhook-stripe</code>.
               Listen for the <b>checkout.session.completed</b> event.
             </div>
           </div>
@@ -110,14 +110,14 @@
 
       <div>
         <div class="flex items-center gap-2 mb-1">
-          <label class="block text-sm text-gray-600 font-medium">Mercado Libre Access Token</label>
+          <label class="block text-sm text-gray-600 font-medium">Mercado Pago Access Token</label>
           <div class="group relative">
             <span class="cursor-help text-slate-400 bg-slate-100 rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold">?</span>
             <div class="invisible group-hover:visible absolute left-full ml-2 top-0 w-64 p-3 bg-slate-800 text-white text-xs rounded-lg shadow-xl z-50 leading-relaxed">
-              Found in Mercado Libre Developers > Your credentials > Production credentials.
+              Found in Mercado Pago Developers > Your credentials > Production credentials.
               Use the <b>Access Token (APP_USR-...)</b>.
-              Configure the webhook at: <code>https://supabase.vmflow.xyz/functions/v1/mercadopago-webhook</code>.
-              Topic: <b>merchant_order</b>.
+              Configure the webhook at: <code>https://supabase.vmflow.xyz/functions/v1/webhook-mp</code>.
+              Topic: <b>payment</b>.
             </div>
           </div>
         </div>

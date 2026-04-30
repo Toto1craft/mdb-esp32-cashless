@@ -51,7 +51,6 @@
           <th class="p-4">Device</th>
           <th class="p-4">Status</th>
           <th class="p-4 w-40">Stock</th>
-          <th class="p-4">Payment Link</th>
           <th class="p-4">Actions</th>
           </tr>
           </thead>
@@ -63,22 +62,6 @@
           :key="machine.id"
           class="border-t hover:bg-gray-50"
           >
-          ...
-          <td class="p-4">
-            <div class="flex items-center gap-2">
-              <code class="bg-gray-50 px-2 py-1 rounded text-[10px] border border-gray-100 max-w-[150px] truncate">
-                https://vmflow.xyz/pay/{{ machine.id }}
-              </code>
-              <button 
-                @click="copyPaymentLink(machine.id)" 
-                title="Copy Link"
-                class="hover:text-blue-600"
-              >
-                📋
-              </button>
-            </div>
-          </td>
-
           <td class="p-4 space-x-2">
 
             {{ machine.name }}
@@ -710,50 +693,47 @@
   </div>
 </div>
 
-<!-- MP QR CODE MODAL -->
+<!-- PAYMENT QR CODE MODAL -->
 
 <div
-  v-if="showMpQrModal"
+  v-if="showQrModal"
   class="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
 >
   <div class="bg-white rounded-xl w-full max-w-sm mx-4 flex flex-col">
 
     <div class="p-5 border-b flex justify-between items-center">
       <div>
-        <h2 class="text-lg font-semibold text-gray-800">MP QR Code</h2>
-        <p class="text-sm text-gray-500">{{ mpQrMachineName }}</p>
+        <h2 class="text-lg font-semibold text-gray-800">{{ qrModalTitle }}</h2>
+        <p class="text-sm text-gray-500">{{ qrModalMachineName }}</p>
       </div>
-      <button @click="showMpQrModal = false" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+      <button @click="showQrModal = false" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
     </div>
 
     <div class="p-6 flex flex-col items-center gap-4">
-
-      <div v-if="mpQrLoading" class="py-8 flex flex-col items-center gap-3 text-gray-500 text-sm">
-        <svg class="animate-spin w-6 h-6" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-        </svg>
-        Generating QR Code...
-      </div>
-
-      <p v-else-if="mpQrError" class="text-red-500 text-sm text-center">{{ mpQrError }}</p>
-
-      <template v-else-if="mpQrSrc">
-        <img :src="mpQrSrc" alt="Mercado Libre QR Code" class="w-56 h-56 object-contain border rounded-lg p-2" />
-        <p class="text-xs text-gray-500 text-center">
-          Imprima e cole na máquina. O cliente escaneia com o app Mercado Libre,
-          digita o valor e paga.
-        </p>
+      <img
+        :src="'https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=' + encodeURIComponent(qrUrl)"
+        alt="QR Code"
+        class="w-56 h-56 object-contain border rounded-lg p-2"
+      />
+      <p class="text-xs text-gray-500 text-center">
+        Print and attach to the machine. The customer scans, enters the amount and pays.
+      </p>
+      <div class="flex gap-2 w-full">
+        <button
+          @click="copyQrUrl"
+          class="flex-1 px-3 py-2 border rounded text-sm text-gray-700 hover:bg-gray-50 transition"
+        >
+          {{ qrCopied ? 'Copied!' : 'Copy link' }}
+        </button>
         <a
-          :href="mpQrSrc"
-          :download="`qr-${mpQrMachineName}.png`"
+          :href="'https://api.qrserver.com/v1/create-qr-code/?size=512x512&data=' + encodeURIComponent(qrUrl)"
+          :download="`qr-${qrModalMachineName}.png`"
           target="_blank"
-          class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-sm rounded transition"
+          class="flex-1 text-center px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white text-sm rounded transition"
         >
           Download QR
         </a>
-      </template>
-
+      </div>
     </div>
 
   </div>
@@ -790,9 +770,13 @@
         class="w-full text-left px-4 py-2 text-sm text-green-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
       >Send Credit</button>
       <button
-        @click.stop="openMpQrModal(machine); openMenuId = null"
+        @click.stop="openQrModal(machine, 'stripe'); openMenuId = null"
         class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-      >MP QR Code</button>
+      >QR Code Stripe</button>
+      <button
+        @click.stop="openQrModal(machine, 'ml'); openMenuId = null"
+        class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+      >QR Code Mercado Pago</button>
     </template>
   </template>
 </div>
@@ -859,11 +843,11 @@ export default {
       insightError: '',
       insightAbort: null,
 
-      showMpQrModal: false,
-      mpQrLoading: false,
-      mpQrError: '',
-      mpQrImage: null,
-      mpQrMachineName: '',
+      showQrModal: false,
+      qrModalTitle: '',
+      qrModalMachineName: '',
+      qrUrl: '',
+      qrCopied: false,
 
       showEditModal: false,
       editingMachine: null,
@@ -881,11 +865,6 @@ export default {
     canShare() {
       return !!navigator.share
     },
-    mpQrSrc() {
-      if (!this.mpQrImage) return null
-      if (this.mpQrImage.startsWith('http')) return this.mpQrImage
-      return `data:image/png;base64,${this.mpQrImage}`
-    }
   },
 
   mounted() {
@@ -1059,10 +1038,30 @@ export default {
       setTimeout(() => { this.toast = null }, 3000)
     },
 
-    copyPaymentLink(id) {
-      const url = `https://vmflow.xyz/pay/${id}`
-      navigator.clipboard.writeText(url)
-      this.showToast('Payment link copied!')
+    openQrModal(machine, gateway) {
+      const base = `https://vmflow.xyz/pay/${gateway}/${machine.id}`
+      this.qrUrl = base
+      this.qrModalTitle = gateway === 'stripe' ? 'QR Code Stripe' : 'QR Code Mercado Pago'
+      this.qrModalMachineName = machine.name
+      this.qrCopied = false
+      this.showQrModal = true
+    },
+
+    async copyQrUrl() {
+      try {
+        await navigator.clipboard.writeText(this.qrUrl)
+      } catch {
+        const el = document.createElement('textarea')
+        el.value = this.qrUrl
+        el.style.position = 'fixed'
+        el.style.opacity = '0'
+        document.body.appendChild(el)
+        el.select()
+        document.execCommand('copy')
+        document.body.removeChild(el)
+      }
+      this.qrCopied = true
+      setTimeout(() => { this.qrCopied = false }, 2000)
     },
 
     async openModelDialog(machine) {
@@ -1530,31 +1529,6 @@ Instructions:
         other:         'bg-slate-100 text-slate-600',
       }
       return map[cat] ?? 'bg-slate-100 text-slate-600'
-    },
-
-    async openMpQrModal(machine) {
-      this.mpQrMachineName = machine.name
-      this.mpQrImage = null
-      this.mpQrError = ''
-      this.mpQrLoading = true
-      this.showMpQrModal = true
-
-      try {
-        const { data, error } = await supabase.functions.invoke('create-mp-pos', {
-          body: { machineId: machine.id }
-        })
-
-        if (error) throw error
-        if (data?.error) throw new Error(data.error)
-
-        this.mpQrImage = data.qr_image ?? data.qr_template
-        if (!this.mpQrImage) throw new Error('QR code not returned by Mercado Libre.')
-      } catch (err) {
-        this.mpQrError = err.message ?? 'Failed to generate QR Code.'
-        console.error('openMpQrModal error:', err)
-      } finally {
-        this.mpQrLoading = false
-      }
     },
 
     async saveCoils() {

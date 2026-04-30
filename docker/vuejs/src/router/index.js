@@ -7,6 +7,7 @@ import Register from '@/views/Register.vue'
 import ForgotPassword from '@/views/ForgotPassword.vue'
 import ResetPassword from '@/views/ResetPassword.vue'
 import Payment from '@/views/Payment.vue'
+import PaymentML from '@/views/PaymentML.vue'
 
 import Dashboard from '@/views/Dashboard.vue'
 import DashboardHome from '@/views/Dashboard_Home.vue'
@@ -23,7 +24,9 @@ import DashboardArcade from '@/views/Dashboard_Arcade.vue'
 const routes = [
   { path: '/', redirect: '/home' },
   { path: '/home', component: Home },
-  { path: '/pay/:machineId', component: Payment, name: 'Payment' },
+  { path: '/pay/stripe/:machineId', component: Payment,   name: 'PaymentStripe' },
+  { path: '/pay/ml/:machineId',     component: PaymentML, name: 'PaymentML' },
+  { path: '/pay/:machineId', redirect: to => `/pay/stripe/${to.params.machineId}` },
   {
     path: '/dashboard',
     component: Dashboard,
