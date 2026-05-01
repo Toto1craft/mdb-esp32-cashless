@@ -116,13 +116,11 @@ function resetCanceled() {
 async function fetchMachine() {
   try {
     const { data, error } = await supabase
-      .from('machines')
-      .select('name')
-      .eq('id', machineId)
-      .single()
+      .rpc('get_machine_name', { machine_id: machineId })
 
     if (error) throw error
-    if (data) machineName.value = data.name
+    if (data) machineName.value = data
+    else machineError.value = 'Machine not found or unavailable.'
   } catch (err) {
     console.error('Error fetching machine:', err)
     machineError.value = 'Machine not found or unavailable.'

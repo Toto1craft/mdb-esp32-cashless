@@ -169,6 +169,16 @@ END;$$;
 ALTER FUNCTION "public"."fill_sale_coil_data"() OWNER TO "supabase_admin";
 
 
+CREATE OR REPLACE FUNCTION "public"."get_machine_name"("machine_id" "uuid") RETURNS "text"
+    LANGUAGE "sql" SECURITY DEFINER
+    SET "search_path" TO 'public'
+    AS $$
+  SELECT name FROM public.machines WHERE id = machine_id;
+$$;
+
+
+ALTER FUNCTION "public"."get_machine_name"("machine_id" "uuid") OWNER TO "supabase_admin";
+
 
 CREATE OR REPLACE FUNCTION "public"."sync_machine_coils_on_model_change"() RETURNS "trigger"
     LANGUAGE "plpgsql"
@@ -450,7 +460,7 @@ ALTER TABLE ONLY "public"."sales"
 
 
 
-CREATE OR REPLACE TRIGGER "trg_debit_product_stock_on_coil_refill" AFTER UPDATE OF "current_stock" ON "public"."machine_coils" FOR EACH ROW EXECUTE FUNCTION "public"."debit_product_stock_on_coil_refill"();
+CREATE OR REPLACE TRIGGER "trg_debit_product_stock_on_coil_refill" AFTER UPDATE OF "current_stock" ON "public"."machine_coils" FOR EACH ROW WHEN (("new"."current_stock" > "old"."current_stock")) EXECUTE FUNCTION "public"."debit_product_stock_on_coil_refill"();
 
 
 
@@ -649,6 +659,10 @@ CREATE POLICY "update_policy" ON "public"."products" FOR UPDATE TO "authenticate
 
 
 ALTER PUBLICATION "supabase_realtime" OWNER TO "postgres";
+
+
+
+
 
 
 ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."embedded";
@@ -859,6 +873,12 @@ GRANT ALL ON FUNCTION "public"."fill_sale_coil_data"() TO "anon";
 GRANT ALL ON FUNCTION "public"."fill_sale_coil_data"() TO "authenticated";
 GRANT ALL ON FUNCTION "public"."fill_sale_coil_data"() TO "service_role";
 
+
+
+GRANT ALL ON FUNCTION "public"."get_machine_name"("machine_id" "uuid") TO "postgres";
+GRANT ALL ON FUNCTION "public"."get_machine_name"("machine_id" "uuid") TO "anon";
+GRANT ALL ON FUNCTION "public"."get_machine_name"("machine_id" "uuid") TO "authenticated";
+GRANT ALL ON FUNCTION "public"."get_machine_name"("machine_id" "uuid") TO "service_role";
 
 
 
