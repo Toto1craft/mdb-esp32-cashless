@@ -19,7 +19,7 @@ export function decodePayloadWithXOR(passkey: string, payload: Uint8Array): Uint
 
   let chk = payload.slice(0, -1).reduce((acc, val) => acc + val, 0);
 
-  if(payload[payload.length - 1] !== chk){
+  if(payload[payload.length - 1] !== (chk & 0xff)){
     throw new Error("Invalid checksum");
   }
 

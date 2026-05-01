@@ -1,7 +1,7 @@
 // deno run --allow-net index.ts
 import { Client } from 'https://deno.land/x/mqtt/deno/mod.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2'
-import { encodePayloadWithXOR, decodePayloadWithXOR } from '../_shared/vmflow-payload.ts';
+import { encodePayloadWithXOR } from '../_shared/vmflow-payload.ts';
 
 function toScaleFactor(p: number, x: number, y: number): number {
   return p / x / Math.pow(10, -y);

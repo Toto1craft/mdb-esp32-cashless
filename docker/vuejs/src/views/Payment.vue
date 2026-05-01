@@ -155,7 +155,7 @@ async function handlePayment() {
     if (err.context) {
       try {
         const body = await err.context.json()
-        if (body?.error) message = body.error
+        message = body?.error || body?.msg || message
       } catch {}
     }
     alert('Payment error: ' + message)
