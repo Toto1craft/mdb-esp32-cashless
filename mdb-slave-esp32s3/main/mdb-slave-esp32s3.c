@@ -34,21 +34,21 @@
 
 #define TAG "mdb_cashless"
 
-#define STRINGIFY_IMPL(x) #x
-#define STRINGIFY(x)      STRINGIFY_IMPL(x)
+#define STRINGIFY_IMPL(x)   #x
+#define STRINGIFY(x)        STRINGIFY_IMPL(x)
 
-#define PIN_I2C_SDA             GPIO_NUM_10
-#define PIN_I2C_SCL             GPIO_NUM_11
-#define PIN_PULSE_1             GPIO_NUM_13
-#define PIN_MDB_RX              GPIO_NUM_4
-#define PIN_MDB_TX              GPIO_NUM_5
-#define PIN_MDB_LED             GPIO_NUM_21
-#define PIN_DEX_RX              GPIO_NUM_8
-#define PIN_DEX_TX              GPIO_NUM_9
-#define PIN_SIM7080G_RX         GPIO_NUM_18
-#define PIN_SIM7080G_TX         GPIO_NUM_17
-#define PIN_SIM7080G_PWR        GPIO_NUM_14
-#define PIN_BUZZER_PWR          GPIO_NUM_12
+#define PIN_I2C_SDA         GPIO_NUM_10
+#define PIN_I2C_SCL         GPIO_NUM_11
+#define PIN_PULSE_1         GPIO_NUM_13
+#define PIN_MDB_RX          GPIO_NUM_4
+#define PIN_MDB_TX          GPIO_NUM_5
+#define PIN_MDB_LED         GPIO_NUM_21
+#define PIN_DEX_RX          GPIO_NUM_8
+#define PIN_DEX_TX          GPIO_NUM_9
+#define PIN_SIM7080G_RX     GPIO_NUM_18
+#define PIN_SIM7080G_TX     GPIO_NUM_17
+#define PIN_SIM7080G_PWR    GPIO_NUM_14
+#define PIN_BUZZER_PWR      GPIO_NUM_12
 
 // Functions for scale factor conversion
 #define TO_SCALE_FACTOR(p, scale_to, dec_to) (p / scale_to / pow(10, -(dec_to) ))               // Converts to scale factor
@@ -63,25 +63,23 @@
 #define BIT_ADD_SET   	0b011111000
 #define BIT_CMD_SET   	0b000000111
 
-enum BIT_EVENTS {
-    BIT_EVT_INTERNET    = (1 << 0),
-    BIT_EVT_MDB         = (1 << 1),
-    BIT_EVT_PSSKEY      = (1 << 2),
-    BIT_EVT_DOMAIN      = (1 << 3),
-    BIT_EVT_BUZZER      = (1 << 4),
-    BIT_EVT_TRIGGER     = (1 << 5),
-    MASK_EVT_INSTALLED  = (BIT_EVT_PSSKEY | BIT_EVT_DOMAIN)
+enum BIT_STATUS {
+    BIT_STATUS_INTERNET    = (1 << 0),
+    BIT_STATUS_MDB         = (1 << 1),
+    BIT_STATUS_PSSKEY      = (1 << 2),
+    BIT_STATUS_DOMAIN      = (1 << 3),
+    BIT_STATUS_BUZZER      = (1 << 4),
+    BIT_STATUS_TRIGGER     = (1 << 5),
+    MASK_STATUS_INSTALLED  = (BIT_STATUS_PSSKEY | BIT_STATUS_DOMAIN)
+};
+
+enum BIT_INTERNET {
+    BIT_PPP_GOT_IP         = (1 << 0),
+    BIT_AT_GOT_IP          = (1 << 1)
 };
 
 EventGroupHandle_t xLedEventGroup;
-
-esp_timer_handle_t periodic_pax_timer;
-
-static bool mqtt_started = false;
-static bool sntp_started = false;
-
-static bool is_wifi_on = false;
-static bool is_ppp_on = false;
+EventGroupHandle_t xInternetEventGroup;
 
 #define WIFI_MAX_RETRY 5
 static uint8_t wifi_retry_count = 0;
@@ -144,17 +142,17 @@ bool vend_denied_todo = false;
 bool cashless_reset_todo = false;
 bool out_of_sequence_todo = false;
 
-RingbufHandle_t dexRingbuf;
+RingbufHandle_t dex_ringbuf;
 
 // MQTT client handle
-esp_mqtt_client_handle_t mqttClient = NULL;
+esp_mqtt_client_handle_t mqtt_client = NULL;
 
 // Message queues for communication
 static QueueHandle_t mdb_session_queue = NULL;
 static QueueHandle_t mdb_rx_queue;
 
-void xorEncodeWithPasskey(uint8_t cmd, uint16_t itemPrice, uint16_t itemNumber, uint8_t *payload);
-uint8_t xorDecodeWithPasskey(uint16_t *itemPrice, uint16_t *itemNumber, uint8_t *payload);
+void xor_encode_with_passkey(uint8_t cmd, uint16_t item_price, uint16_t item_number, uint8_t *payload);
+esp_err_t xor_decode_with_passkey(uint16_t *item_price, uint16_t *item_number, uint8_t *payload);
 
 static void IRAM_ATTR mdb_rx_falling_isr(void *arg) {
     // Disable interrupt for this pin to prevent re-triggering on data bits (0)
@@ -186,7 +184,6 @@ uint16_t read_9(uint8_t *checksum) {
 }
 
 void write_9(uint16_t nth9) {
-
     gpio_set_level(PIN_MDB_TX, 0);  // Start bit
     ets_delay_us(104);              // 9600bps
 
@@ -201,7 +198,6 @@ void write_9(uint16_t nth9) {
 
 // Function to transmit the payload via bit-banging (using MDB protocol)
 void write_payload_9(uint8_t *mdb_payload, uint8_t length) {
-
 	uint8_t checksum = 0x00;
 
 	// Calculate checksum
@@ -214,19 +210,17 @@ void write_payload_9(uint8_t *mdb_payload, uint8_t length) {
 	write_9(BIT_MODE_SET | checksum);
 }
 void mdb_cashless_task(void *pvParameters) {
-
 	time_t session_begin_time = 0;
 
-	uint16_t fundsAvailable = 0;
-	uint16_t itemPrice = 0;
-	uint16_t itemNumber = 0;
+	uint16_t funds_available = 0;
+	uint16_t item_price = 0;
+	uint16_t item_number = 0;
 
 	// Payload buffer and available transmission flag
 	uint8_t mdb_payload[36];
 	uint8_t available_tx = 0;
 
 	for (;;) {
-
 		// In the MDB (Multi-Drop Bus) protocol, the last byte of a command or data packet is a checksum.
 		uint8_t checksum = 0x00;
 
@@ -234,7 +228,6 @@ void mdb_cashless_task(void *pvParameters) {
 		uint16_t coming_read = read_9(&checksum);
 
 		if (coming_read & BIT_MODE_SET) {
-
 			if ((uint8_t) coming_read == ACK) {
 				// ACK
 			} else if ((uint8_t) coming_read == RET) {
@@ -242,15 +235,12 @@ void mdb_cashless_task(void *pvParameters) {
 			} else if ((uint8_t) coming_read == NAK) {
 				// NAK
 			} else if ((coming_read & BIT_ADD_SET) == CONFIG_CASHLESS_DEVICE_ADDRESS) {
-
 				// Reset transmission availability
 				available_tx = 0;
 
 				// Command decoding based on incoming data
 				switch (coming_read & BIT_CMD_SET) {
-
 				case RESET: {
-
                     if (read_9(NULL) != checksum) continue;
 
                     // Reset during VEND_STATE is interpreted as VEND_SUCCESS
@@ -258,25 +248,24 @@ void mdb_cashless_task(void *pvParameters) {
 					cashless_reset_todo = true;
 					machine_state = INACTIVE_STATE;
 
-                    xEventGroupClearBits(xLedEventGroup, BIT_EVT_MDB);
-                    xEventGroupSetBits(xLedEventGroup, BIT_EVT_TRIGGER);
+                    xEventGroupClearBits(xLedEventGroup, BIT_STATUS_MDB);
+                    xEventGroupSetBits(xLedEventGroup, BIT_STATUS_TRIGGER);
 
                     ESP_LOGI( TAG, "RESET");
 					break;
 				}
 				case SETUP: {
 					switch (read_9(&checksum)) {
-
 					case CONFIG_DATA: {
-						uint8_t vmcFeatureLevel = read_9(&checksum);
-						uint8_t vmcColumnsOnDisplay = read_9(&checksum);
-						uint8_t vmcRowsOnDisplay = read_9(&checksum);
-						uint8_t vmcDisplayInfo = read_9(&checksum);
+						uint8_t vmc_feature_level = read_9(&checksum);
+						uint8_t vmc_columns_on_display = read_9(&checksum);
+						uint8_t vmc_rows_on_display = read_9(&checksum);
+						uint8_t vmc_display_info = read_9(&checksum);
 
-						(void) vmcDisplayInfo;
-						(void) vmcRowsOnDisplay;
-						(void) vmcColumnsOnDisplay;
-						(void) vmcFeatureLevel;
+						(void) vmc_display_info;
+						(void) vmc_rows_on_display;
+						(void) vmc_columns_on_display;
+						(void) vmc_feature_level;
 
                         if (read_9(NULL) != checksum) continue;
 
@@ -298,12 +287,11 @@ void mdb_cashless_task(void *pvParameters) {
 						break;
 					}
 					case MAX_MIN_PRICES: {
+						uint16_t max_price = (read_9(&checksum) << 8) | read_9(&checksum);
+						uint16_t min_price = (read_9(&checksum) << 8) | read_9(&checksum);
 
-						uint16_t maxPrice = (read_9(&checksum) << 8) | read_9(&checksum);
-						uint16_t minPrice = (read_9(&checksum) << 8) | read_9(&checksum);
-
-						(void) maxPrice;
-						(void) minPrice;
+						(void) max_price;
+						(void) min_price;
 
                         if (read_9(NULL) != checksum) continue;
 
@@ -315,7 +303,6 @@ void mdb_cashless_task(void *pvParameters) {
 					break;
 				}
 				case POLL: {
-
 				    if (read_9(NULL) != checksum) continue;
 
 					if (cashless_reset_todo) {
@@ -324,15 +311,15 @@ void mdb_cashless_task(void *pvParameters) {
 						mdb_payload[0] = 0x00;
 						available_tx = 1;
 
-					} else if (machine_state <= ENABLED_STATE && xQueueReceive(mdb_session_queue, &fundsAvailable, 0)) {
+					} else if (machine_state <= ENABLED_STATE && xQueueReceive(mdb_session_queue, &funds_available, 0)) {
 						// Begin session
 						session_begin_todo = false;
 
 						machine_state = IDLE_STATE;
 
 						mdb_payload[0] = 0x03;
-                        mdb_payload[1] = fundsAvailable >> 8;
-                        mdb_payload[2] = fundsAvailable;
+                        mdb_payload[1] = funds_available >> 8;
+                        mdb_payload[2] = funds_available;
                         available_tx = 3;
 
 						time( &session_begin_time);
@@ -349,8 +336,8 @@ void mdb_cashless_task(void *pvParameters) {
 						vend_approved_todo = false;
 
 						mdb_payload[0] = 0x05;
-						mdb_payload[1] = itemPrice >> 8;
-						mdb_payload[2] = itemPrice;
+						mdb_payload[1] = item_price >> 8;
+						mdb_payload[2] = item_price;
 						available_tx = 3;
 
 					} else if (vend_denied_todo) {
@@ -377,7 +364,6 @@ void mdb_cashless_task(void *pvParameters) {
 						available_tx = 1;
 
 					} else {
-
 						time_t now = time(NULL);
 
 						if (machine_state >= IDLE_STATE && (now - session_begin_time /*elapsed*/) > 60 /*60 sec*/) {
@@ -390,17 +376,15 @@ void mdb_cashless_task(void *pvParameters) {
 				case VEND: {
 					switch (read_9(&checksum)) {
 					case VEND_REQUEST: {
-
-						itemPrice = (read_9(&checksum) << 8) | read_9(&checksum);
-						itemNumber = (read_9(&checksum) << 8) | read_9(&checksum);
+						item_price = (read_9(&checksum) << 8) | read_9(&checksum);
+						item_number = (read_9(&checksum) << 8) | read_9(&checksum);
 
                         if (read_9(NULL) != checksum) continue;
 
 						machine_state = VEND_STATE;
 
-                        if(fundsAvailable && (fundsAvailable != 0xffff)){
-
-                            if (itemPrice <= fundsAvailable) {
+                        if(funds_available && (funds_available != 0xffff)){
+                            if (item_price <= funds_available) {
                                 vend_approved_todo = true;
                             } else {
                                 vend_denied_todo = true;
@@ -409,9 +393,9 @@ void mdb_cashless_task(void *pvParameters) {
 
 						/* PIPE_BLE */
 						uint8_t payload[19];
-						xorEncodeWithPasskey(0x0a, itemPrice, itemNumber, (uint8_t*) &payload);
+						xor_encode_with_passkey(0x0a, item_price, item_number, payload);
 
-                        ble_notify_send((char*) &payload, sizeof(payload));
+                        ble_notify_send((char*) payload, sizeof(payload));
 
 						ESP_LOGI( TAG, "VEND_REQUEST");
 						break;
@@ -423,8 +407,7 @@ void mdb_cashless_task(void *pvParameters) {
 						break;
 					}
 					case VEND_SUCCESS: {
-
-						itemNumber = (read_9(&checksum) << 8) | read_9(&checksum);
+						item_number = (read_9(&checksum) << 8) | read_9(&checksum);
 
                         if (read_9(NULL) != checksum) continue;
 
@@ -432,9 +415,9 @@ void mdb_cashless_task(void *pvParameters) {
 
 						/* PIPE_BLE */
 						uint8_t payload[19];
-						xorEncodeWithPasskey(0x0b, itemPrice, itemNumber, (uint8_t*) &payload);
+						xor_encode_with_passkey(0x0b, item_price, item_number, payload);
 
-                        ble_notify_send((char*) &payload, sizeof(payload));
+                        ble_notify_send((char*) payload, sizeof(payload));
 
 						ESP_LOGI( TAG, "VEND_SUCCESS");
 						break;
@@ -446,9 +429,9 @@ void mdb_cashless_task(void *pvParameters) {
 
 					    /* PIPE_BLE */
 						uint8_t payload[19];
-						xorEncodeWithPasskey(0x0c, itemPrice, itemNumber, (uint8_t*) &payload);
+						xor_encode_with_passkey(0x0c, item_price, item_number, payload);
 
-                        ble_notify_send((char*) &payload, sizeof(payload));
+                        ble_notify_send((char*) payload, sizeof(payload));
 						break;
 					}
 					case SESSION_COMPLETE: {
@@ -458,27 +441,26 @@ void mdb_cashless_task(void *pvParameters) {
 
 			            /* PIPE_BLE */
 						uint8_t payload[19];
-						xorEncodeWithPasskey(0x0d, itemPrice, itemNumber, (uint8_t*) &payload);
+						xor_encode_with_passkey(0x0d, item_price, item_number, payload);
 
-                        ble_notify_send((char*) &payload, sizeof(payload));
+                        ble_notify_send((char*) payload, sizeof(payload));
 
 						ESP_LOGI( TAG, "SESSION_COMPLETE");
 						break;
 					}
 					case CASH_SALE: {
-
-						uint16_t itemPrice = (read_9(&checksum) << 8) | read_9(&checksum);
-						uint16_t itemNumber = (read_9(&checksum) << 8) | read_9(&checksum);
+						uint16_t item_price = (read_9(&checksum) << 8) | read_9(&checksum);
+						uint16_t item_number = (read_9(&checksum) << 8) | read_9(&checksum);
 
 						if (read_9(NULL) != checksum) continue;
 
                         uint8_t payload[19];
-                        xorEncodeWithPasskey(0x21, itemPrice, itemNumber, (uint8_t*) &payload);
+                        xor_encode_with_passkey(0x21, item_price, item_number, payload);
 
                         char topic[64];
                         snprintf(topic, sizeof(topic), "domain.vmflow.xyz/%s/sale", my_subdomain);
 
-                        esp_mqtt_client_publish(mqttClient, topic, (char*) &payload, sizeof(payload), 1, 0);
+                        esp_mqtt_client_publish(mqtt_client, topic, (char*) payload, sizeof(payload), 1, 0);
 
                         ESP_LOGI( TAG, "CASH_SALE");
 						break;
@@ -494,8 +476,8 @@ void mdb_cashless_task(void *pvParameters) {
 
 						machine_state = DISABLED_STATE;
 
-                        xEventGroupClearBits(xLedEventGroup, BIT_EVT_MDB);
-                        xEventGroupSetBits(xLedEventGroup, BIT_EVT_TRIGGER);
+                        xEventGroupClearBits(xLedEventGroup, BIT_STATUS_MDB);
+                        xEventGroupSetBits(xLedEventGroup, BIT_STATUS_TRIGGER);
 
 						// ESP_LOGI( TAG, "READER_DISABLE");
 						break;
@@ -505,7 +487,7 @@ void mdb_cashless_task(void *pvParameters) {
 
 						machine_state = ENABLED_STATE;
 
-                        xEventGroupSetBits(xLedEventGroup, BIT_EVT_MDB | BIT_EVT_TRIGGER);
+                        xEventGroupSetBits(xLedEventGroup, BIT_STATUS_MDB | BIT_STATUS_TRIGGER);
 
 						// ESP_LOGI( TAG, "READER_ENABLE");
 						break;
@@ -524,14 +506,12 @@ void mdb_cashless_task(void *pvParameters) {
 					break;
 				}
 				case EXPANSION: {
-
 					switch (read_9(&checksum)) {
 					case REQUEST_ID: {
-
-                        /*char manufacturerCode[3];
-                        char serialNumber[12];
-                        char modelNumber[12];
-                        char softwareVersion[2];*/
+                        /*char manufacturer_code[3];
+                        char serial_number[12];
+                        char model_number[12];
+                        char software_version[2];*/
 
 					    for(uint8_t x= 0; x < 29; x++) read_9(&checksum); // ...drop
 
@@ -557,10 +537,9 @@ void mdb_cashless_task(void *pvParameters) {
 				}
 
 				// Transmit the prepared payload via bit-banging
-				write_payload_9((uint8_t*) &mdb_payload, available_tx);
+				write_payload_9(mdb_payload, available_tx);
 
 			} else {
-
 				// Not the intended address...
 			}
 		}
@@ -588,8 +567,7 @@ void mdb_cashless_task(void *pvParameters) {
  */
 
 // Decode payload from communication between BLE and MQTT
-uint8_t xorDecodeWithPasskey(uint16_t *itemPrice, uint16_t *itemNumber, uint8_t *payload) {
-
+esp_err_t xor_decode_with_passkey(uint16_t *item_price, uint16_t *item_number, uint8_t *payload) {
 	for(int x = 0; x < sizeof(my_passkey); x++){
 		payload[x + 1] ^= my_passkey[x];
 	}
@@ -602,7 +580,7 @@ uint8_t xorDecodeWithPasskey(uint16_t *itemPrice, uint16_t *itemNumber, uint8_t 
 	}
 
     if(chk != payload[p_len - 1]){
-        return 0;
+        return ESP_ERR_INVALID_CRC;
     }
 
     int32_t timestamp = ((uint32_t) payload[7] << 24) |
@@ -613,27 +591,26 @@ uint8_t xorDecodeWithPasskey(uint16_t *itemPrice, uint16_t *itemNumber, uint8_t 
     time_t now = time(NULL);
 
     if( abs((int32_t) now - timestamp) > 8 /*sec*/){
-        return 0;
+        return ESP_ERR_TIMEOUT;
     }
 
-    int32_t itemPrice32 =   ((uint32_t) payload[1] << 24) |
+    int32_t item_price_32 = ((uint32_t) payload[1] << 24) |
                             ((uint32_t) payload[2] << 16) |
                             ((uint32_t) payload[3] << 8)  |
                             ((uint32_t) payload[4] << 0);
 
-    if(itemPrice)
-        *itemPrice = TO_SCALE_FACTOR( FROM_SCALE_FACTOR(itemPrice32, 1, 2), CONFIG_MDB_SCALE_FACTOR, CONFIG_MDB_DECIMAL_PLACES);
+    if(item_price)
+        *item_price = TO_SCALE_FACTOR( FROM_SCALE_FACTOR(item_price_32, 1, 2), CONFIG_MDB_SCALE_FACTOR, CONFIG_MDB_DECIMAL_PLACES);
 
-    if(itemNumber)
-        *itemNumber = ((uint16_t) payload[5] << 8) | ((uint16_t) payload[6] << 0);
+    if(item_number)
+        *item_number = ((uint16_t) payload[5] << 8) | ((uint16_t) payload[6] << 0);
 
-    return 1;
+    return ESP_OK;
 }
 
 // Encode payload to communication between BLE and MQTT
-void xorEncodeWithPasskey(uint8_t cmd, uint16_t itemPrice, uint16_t itemNumber, uint8_t *payload) {
-
-    uint32_t itemPrice32 = TO_SCALE_FACTOR( FROM_SCALE_FACTOR(itemPrice, CONFIG_MDB_SCALE_FACTOR, CONFIG_MDB_DECIMAL_PLACES), 1, 2);
+void xor_encode_with_passkey(uint8_t cmd, uint16_t item_price, uint16_t item_number, uint8_t *payload) {
+    uint32_t item_price_32 = TO_SCALE_FACTOR( FROM_SCALE_FACTOR(item_price, CONFIG_MDB_SCALE_FACTOR, CONFIG_MDB_DECIMAL_PLACES), 1, 2);
 
 	esp_fill_random(payload, 19);
 
@@ -641,12 +618,12 @@ void xorEncodeWithPasskey(uint8_t cmd, uint16_t itemPrice, uint16_t itemNumber, 
 
     payload[0] = cmd;
 
-	payload[1] = itemPrice32 >> 24;     // itemPrice
-    payload[2] = itemPrice32 >> 16;
-	payload[3] = itemPrice32 >> 8;
-	payload[4] = itemPrice32;
-	payload[5] = itemNumber >> 8;	    // itemNumber
-	payload[6] = itemNumber;
+	payload[1] = item_price_32 >> 24;     // item_price
+    payload[2] = item_price_32 >> 16;
+	payload[3] = item_price_32 >> 8;
+	payload[4] = item_price_32;
+	payload[5] = item_number >> 8;	    // item_number
+	payload[6] = item_number;
 	payload[7] = now >> 24;		        // time (sec)
 	payload[8] = now >> 16;
 	payload[9] = now >> 8;
@@ -666,26 +643,22 @@ void xorEncodeWithPasskey(uint8_t cmd, uint16_t itemPrice, uint16_t itemNumber, 
 	}
 }
 
-char* calc_crc_16(uint16_t *pCrc, char *uData) {
+char* calc_crc_16(uint16_t *p_crc, char *u_data) {
+	uint8_t data = *u_data;
 
-	uint8_t data = *uData;
-
-	for (uint8_t iBit = 0; iBit < 8; iBit++, data >>= 1) {
-
-		if ((data ^ *pCrc) & 0x01) {
-
-			*pCrc >>= 1;
-			*pCrc ^= 0xA001;
+	for (uint8_t i_bit = 0; i_bit < 8; i_bit++, data >>= 1) {
+		if ((data ^ *p_crc) & 0x01) {
+			*p_crc >>= 1;
+			*p_crc ^= 0xA001;
 
 		} else
-			*pCrc >>= 1;
+			*p_crc >>= 1;
 	}
 
-	return uData;
+	return u_data;
 }
 
-void readTelemetryDEX() {
-
+void read_telemetry_dex() {
 	uart_set_baudrate(UART_NUM_1, 9600);
     // uart_set_line_inverse(UART_NUM_1, UART_SIGNAL_RXD_INV | UART_SIGNAL_TXD_INV);
 
@@ -781,7 +754,6 @@ void readTelemetryDEX() {
 
 	uint8_t block = 0x00;
 	for (;;) {
-
 		data[0] = 0x10; 				// DLE
 		data[1] = ('0' + (block++ & 1)); 	// '0'|'1' ->
 		uart_write_bytes(UART_NUM_1, data, 2);
@@ -791,7 +763,6 @@ void readTelemetryDEX() {
 		if (data[0] != 0x10 || data[1] != 0x02) return;
 
 		for (;;) {
-
 			uart_read_bytes(UART_NUM_1, data, 1, pdMS_TO_TICKS(200));
 			if (data[0] == 0x10) { // DLE
 
@@ -820,13 +791,12 @@ void readTelemetryDEX() {
 				}
 			}
 
-			xRingbufferSend(dexRingbuf, &data[0], 1, 0);
+			xRingbufferSend(dex_ringbuf, &data[0], 1, 0);
 		}
 	}
 }
 
-void readTelemetryDDCMP() {
-
+void read_telemetry_ddcmp() {
 	uart_set_baudrate(UART_NUM_1, 2400);
     // uart_set_line_inverse(UART_NUM_1, UART_SIGNAL_RXD_INV | UART_SIGNAL_TXD_INV);
 
@@ -1005,7 +975,6 @@ void readTelemetryDDCMP() {
 	uart_write_bytes(UART_NUM_1, crc_, 2 ); // Transmitiu ACK
 
 	do {
-
 		if( uart_read_bytes(UART_NUM_1, buffer_rx, 8, pdMS_TO_TICKS(200)) != 8)
 			break;
 
@@ -1025,7 +994,7 @@ void readTelemetryDDCMP() {
 
 		// Os dados recebidos são: 99 nn "audit dada" crc crc, ou seja, as informaões de audit estão da posição 2 do buffer_rx à posição n_bytes-3
 		for (int x = 2; x < n_bytes_message - 2; x++)
-			xRingbufferSend(dexRingbuf, &buffer_rx[x], 1, 0);
+			xRingbufferSend(dex_ringbuf, &buffer_rx[x], 1, 0);
 
 		crc = 0x0000;
 
@@ -1040,7 +1009,6 @@ void readTelemetryDDCMP() {
 		uart_write_bytes(UART_NUM_1, crc_, 2 ); // Transmitiu ACK
 
 		if (last_package) {
-
 			crc = 0x0000;
 
 			uart_write_bytes( UART_NUM_1, calc_crc_16(&crc, "\x81"), 1 );
@@ -1073,66 +1041,60 @@ void readTelemetryDDCMP() {
 	} while(1);
 }
 
-void requestTelemetryData(void *arg) {
-
-	readTelemetryDDCMP();
-	readTelemetryDEX();
+void request_telemetry_data(void *arg) {
+	read_telemetry_ddcmp();
+	read_telemetry_dex();
 
 	size_t dex_size;
-	uint8_t *dex = (uint8_t*) xRingbufferReceive(dexRingbuf, &dex_size, 0);
+	uint8_t *dex = (uint8_t*) xRingbufferReceive(dex_ringbuf, &dex_size, 0);
 
     if(dex != NULL){
-
         char topic[64];
         snprintf(topic, sizeof(topic), "domain.vmflow.xyz/%s/dex", my_subdomain);
 
-        esp_mqtt_client_publish(mqttClient, topic, (char*) dex, dex_size, 0, 0);
+        esp_mqtt_client_publish(mqtt_client, topic, (char*) dex, dex_size, 0, 0);
         printf("%.*s", dex_size, (char*) dex);
 
-        vRingbufferReturnItem(dexRingbuf, (void*) dex);
+        vRingbufferReturnItem(dex_ringbuf, (void*) dex);
     }
 }
 
 void led_status_task(void *pvParameters) {
-
     while(1){
-        EventBits_t uxBits = xEventGroupWaitBits(xLedEventGroup, BIT_EVT_TRIGGER, pdTRUE, pdFALSE, portMAX_DELAY );
+        EventBits_t uxBits = xEventGroupWaitBits(xLedEventGroup, BIT_STATUS_TRIGGER, pdTRUE, pdFALSE, portMAX_DELAY );
 
-        if ((uxBits & MASK_EVT_INSTALLED) != MASK_EVT_INSTALLED) {
+        if ((uxBits & MASK_STATUS_INSTALLED) != MASK_STATUS_INSTALLED) {
             led_strip_set_pixel(led_strip, 0, 80, 60, 0);   // Not installed := YELLOW
-        } else if ((uxBits & BIT_EVT_MDB) && (uxBits & BIT_EVT_INTERNET)) {
+        } else if ((uxBits & BIT_STATUS_MDB) && (uxBits & BIT_STATUS_INTERNET)) {
             led_strip_set_pixel(led_strip, 0, 10, 80, 10);  // MDB & Internet := GREEN
-        } else if (uxBits & BIT_EVT_MDB) {
+        } else if (uxBits & BIT_STATUS_MDB) {
             led_strip_set_pixel(led_strip, 0, 5, 15, 80);   // Only MDB := BLUE
         } else {
             led_strip_set_pixel(led_strip, 0, 80, 5, 5);    // Inactive/Disabled := RED
         }
         led_strip_refresh(led_strip);
 
-        if(uxBits & BIT_EVT_BUZZER){
-
+        if(uxBits & BIT_STATUS_BUZZER){
             gpio_set_level(PIN_BUZZER_PWR, 1);
             vTaskDelay(pdMS_TO_TICKS(1000));
             gpio_set_level(PIN_BUZZER_PWR, 0);
 
-            xEventGroupClearBits(xLedEventGroup, BIT_EVT_BUZZER);
+            xEventGroupClearBits(xLedEventGroup, BIT_STATUS_BUZZER);
         }
     }
 }
 
 void ble_pax_event_handler(uint16_t devices_count){
-
     uint8_t payload[19];
-    xorEncodeWithPasskey(0x22, 0, devices_count, (uint8_t*) &payload);
+    xor_encode_with_passkey(0x22, 0, devices_count, payload);
 
     char topic[64];
     snprintf(topic, sizeof(topic), "domain.vmflow.xyz/%s/paxcounter", my_subdomain);
 
-    esp_mqtt_client_publish(mqttClient, topic, (char*) &payload, sizeof(payload), 1, 0);
+    esp_mqtt_client_publish(mqtt_client, topic, (char*) payload, sizeof(payload), 1, 0);
 }
 
 void ble_event_handler(char *ble_payload) {
-
     printf("ble_event_handler %x\n", (uint8_t) ble_payload[0]);
 
 	switch ( (uint8_t) ble_payload[0] ) {
@@ -1142,18 +1104,17 @@ void ble_event_handler(char *ble_payload) {
 
 		size_t s_len;
 		if (nvs_get_str(handle, "domain", NULL, &s_len) != ESP_OK) {
+			strcpy(my_subdomain, ble_payload + 1);
 
-			strcpy((char*) &my_subdomain, ble_payload + 1);
-
-			nvs_set_str(handle, "domain", (char*) &my_subdomain);
+			nvs_set_str(handle, "domain", my_subdomain);
 			nvs_commit(handle);
 
 			char myhost[64];
 			snprintf(myhost, sizeof(myhost), "%s.vmflow.xyz", my_subdomain);
 
-			ble_set_device_name((char*) &myhost);
+			ble_set_device_name(myhost);
 
-            xEventGroupSetBits(xLedEventGroup, BIT_EVT_DOMAIN | BIT_EVT_TRIGGER);
+            xEventGroupSetBits(xLedEventGroup, BIT_STATUS_DOMAIN | BIT_STATUS_TRIGGER);
 
 			ESP_LOGI( TAG, "HOST= %s", myhost);
 		}
@@ -1166,13 +1127,12 @@ void ble_event_handler(char *ble_payload) {
 
 		size_t s_len;
 		if (nvs_get_str(handle, "passkey", NULL, &s_len) != ESP_OK) {
+			strcpy(my_passkey, ble_payload + 1);
 
-			strcpy((char*) &my_passkey, ble_payload + 1);
-
-			nvs_set_str(handle, "passkey", (char*) &my_passkey);
+			nvs_set_str(handle, "passkey", my_passkey);
 			nvs_commit(handle);
 
-            xEventGroupSetBits(xLedEventGroup, BIT_EVT_PSSKEY | BIT_EVT_TRIGGER);
+            xEventGroupSetBits(xLedEventGroup, BIT_STATUS_PSSKEY | BIT_STATUS_TRIGGER);
 
 			ESP_LOGI( TAG, "PASSKEY= %s", my_passkey);
 		}
@@ -1181,12 +1141,12 @@ void ble_event_handler(char *ble_payload) {
         break;
     }
     case 0x02: /*Starting a vending session*/
-        uint16_t fundsAvailable = 0xffff;
-		xQueueSend(mdb_session_queue, &fundsAvailable, 0 /*if full, do not wait*/);
+        uint16_t funds_available = 0xffff;
+		xQueueSend(mdb_session_queue, &funds_available, 0 /*if full, do not wait*/);
 		break;
 	case 0x03: /*Approve the vending session*/
 
-        if(xorDecodeWithPasskey(NULL, NULL, (uint8_t*) ble_payload)){
+        if(xor_decode_with_passkey(NULL, NULL, (uint8_t*) ble_payload) == ESP_OK){
             vend_approved_todo = (machine_state == VEND_STATE) ? true : false;
         }
         break;
@@ -1224,9 +1184,8 @@ void ble_event_handler(char *ble_payload) {
 }
 
 static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
-
 	esp_mqtt_event_handle_t event = event_data;
-	esp_mqtt_client_handle_t mqttClient = event->client;
+	esp_mqtt_client_handle_t mqtt_client = event->client;
 
 	switch ((esp_mqtt_event_id_t) event_id) {
 	case MQTT_EVENT_CONNECTED:
@@ -1234,49 +1193,45 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     	char topic[64];
     	snprintf(topic, sizeof(topic), "%s.vmflow.xyz/#", my_subdomain);
 
-    	esp_mqtt_client_subscribe(mqttClient, topic, 0);
-    	ESP_LOGI(TAG, "subscribed to: %s", topic);
+    	esp_mqtt_client_subscribe(mqtt_client, topic, 0);
 
     	char topic_[64];
     	snprintf(topic_, sizeof(topic_), "domain.vmflow.xyz/%s/status", my_subdomain);
 
-		esp_mqtt_client_publish(mqttClient, topic_, "online", 0, 1, 1);
+		esp_mqtt_client_publish(mqtt_client, topic_, "online", 0, 1, 1);
 
-        xEventGroupSetBits(xLedEventGroup, BIT_EVT_INTERNET | BIT_EVT_TRIGGER);
-
-        esp_timer_stop(periodic_pax_timer);
-        esp_timer_start_periodic(periodic_pax_timer, PAX_SCAN_INTERVAL_US);
+        xEventGroupSetBits(xLedEventGroup, BIT_STATUS_INTERNET | BIT_STATUS_TRIGGER);
 
 		break;
 	case MQTT_EVENT_DISCONNECTED:
 
-        xEventGroupClearBits(xLedEventGroup, BIT_EVT_INTERNET);
-        xEventGroupSetBits(xLedEventGroup, BIT_EVT_TRIGGER);
-
-        esp_timer_stop(periodic_pax_timer);
+        xEventGroupClearBits(xLedEventGroup, BIT_STATUS_INTERNET);
+        xEventGroupSetBits(xLedEventGroup, BIT_STATUS_TRIGGER);
 
 		break;
-	case MQTT_EVENT_SUBSCRIBED:
+	case MQTT_EVENT_SUBSCRIBED: {
+		char sub_topic[64];
+		snprintf(sub_topic, sizeof(sub_topic), "%s.vmflow.xyz/#", my_subdomain);
+		ESP_LOGI(TAG, "mqtt subscribed: %s", sub_topic);
 		break;
+	}
 	case MQTT_EVENT_UNSUBSCRIBED:
 		break;
 	case MQTT_EVENT_PUBLISHED:
+		ESP_LOGI(TAG, "MQTT published msg_id=%d", event->msg_id);
 		break;
 	case MQTT_EVENT_DATA:
 
-	    ESP_LOGI( TAG, "TOPIC= %.*s", event->topic_len, event->topic);
-	    ESP_LOGI( TAG, "DATA_LEN= %d", event->data_len);
-	    ESP_LOGI( TAG, "DATA= %.*s", event->data_len, event->data);
+	    ESP_LOGI(TAG, "MQTT data topic=%.*s len=%d data=%.*s", event->topic_len, event->topic, event->data_len, event->data_len, event->data);
 
 		if (event->topic_len > 7 && strncmp(event->topic + event->topic_len - 7, "/credit", 7) == 0) {
+			uint16_t funds_available;
+			if(xor_decode_with_passkey(&funds_available, NULL, (uint8_t*) event->data) == ESP_OK){
+			    xQueueSend(mdb_session_queue, &funds_available, 0 /*if full, do not wait*/);
 
-			uint16_t fundsAvailable;
-			if(xorDecodeWithPasskey(&fundsAvailable, NULL, (uint8_t*) event->data)){
-			    xQueueSend(mdb_session_queue, &fundsAvailable, 0 /*if full, do not wait*/);
+                xEventGroupSetBits(xLedEventGroup, BIT_STATUS_BUZZER | BIT_STATUS_TRIGGER);
 
-                xEventGroupSetBits(xLedEventGroup, BIT_EVT_BUZZER | BIT_EVT_TRIGGER);
-
-                ESP_LOGI( TAG, "Amount= %f", FROM_SCALE_FACTOR(fundsAvailable, CONFIG_MDB_SCALE_FACTOR, CONFIG_MDB_DECIMAL_PLACES) );
+                ESP_LOGI( TAG, "Amount= %f", FROM_SCALE_FACTOR(funds_available, CONFIG_MDB_SCALE_FACTOR, CONFIG_MDB_DECIMAL_PLACES) );
 			}
 		}
 
@@ -1294,58 +1249,38 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 	}
 }
 
-void on_internet_status(bool is_ppp_on, bool is_wifi_on){
-
-    if(is_ppp_on || is_wifi_on){
-        if (!mqtt_started) {
-            esp_mqtt_client_start(mqttClient);
-            mqtt_started = true;
-        }
-
-        if (!sntp_started) {
-            esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-            esp_sntp_setservername(0, "pool.ntp.org");
-            esp_sntp_init();
-
-            sntp_started = true;
-        }
-    }
-
-    if(!is_ppp_on && !is_wifi_on){
-        if (mqtt_started) {
-            esp_mqtt_client_stop(mqttClient);
-            mqtt_started = false;
-        }
-    }
-
+static void ppp_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
+    ESP_LOGI(TAG, "PPP state changed event %d", event_id);
 }
 
 static void ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     switch (event_id) {
         case IP_EVENT_PPP_GOT_IP: {
-            is_ppp_on = true;
             ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
             ESP_LOGI(TAG, "ppp got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+            xEventGroupSetBits(xInternetEventGroup, BIT_PPP_GOT_IP);
             break;
         }
         case IP_EVENT_PPP_LOST_IP:
             ESP_LOGW(TAG, "ppp lost IP, rebooting...");
+
             vTaskDelay(pdMS_TO_TICKS(2000));
             esp_restart();
             break;
         case IP_EVENT_STA_GOT_IP: {
-            is_wifi_on = true;
             ip_event_got_ip_t *event = (ip_event_got_ip_t *) event_data;
             ESP_LOGI(TAG, "wifi got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+            xEventGroupSetBits(xInternetEventGroup, BIT_AT_GOT_IP);
             break;
         }
+        case IP_EVENT_STA_LOST_IP:
+            xEventGroupClearBits(xInternetEventGroup, BIT_AT_GOT_IP);
+            ESP_LOGW(TAG, "wifi lost IP");
+            break;
     }
-
-    on_internet_status(is_ppp_on, is_wifi_on);
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
-
     switch (event_id) {
     case WIFI_EVENT_STA_START:
         esp_wifi_connect();
@@ -1354,10 +1289,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         wifi_retry_count = 0;
         break;
     case WIFI_EVENT_STA_DISCONNECTED:
-		is_wifi_on = false;
 
-        if (wifi_retry_count < WIFI_MAX_RETRY) {
-            wifi_retry_count++;
+        if (wifi_retry_count++ < WIFI_MAX_RETRY) {
             ESP_LOGI(TAG, "WiFi reconnect attempt %d/%d", wifi_retry_count, WIFI_MAX_RETRY);
             esp_wifi_connect();
         } else {
@@ -1366,12 +1299,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 
         break;
     }
-
-    on_internet_status(is_ppp_on, is_wifi_on);
 }
 
 static void sim7080g_pulse_power(void) {
-
     /* transistor inverts: GPIO high → PWRKEY low on SIM7080G (active pulse) */
     gpio_set_level(PIN_SIM7080G_PWR, 1);
     vTaskDelay(pdMS_TO_TICKS(1200));
@@ -1382,49 +1312,32 @@ static void sim7080g_pulse_power(void) {
 }
 
 /* Wait for EPS network registration (AT+CEREG: stat=1 home, stat=5 roaming) */
-static void sim7080g_wait_registered(esp_modem_dce_t *dce) {
-
+static esp_err_t sim7080g_wait_registered(esp_modem_dce_t *dce) {
     char resp[64];
     for (int i = 0; i < 30; i++) {
         memset(resp, 0, sizeof(resp));
         esp_modem_at(dce, "AT+CEREG?", resp, 3000);
         /* response: +CEREG: <n>,<stat> — stat 1=home, 5=roaming */
         if (strstr(resp, ",1") || strstr(resp, ",5")) {
-            ESP_LOGI(TAG, "network registered (%s)", resp);
-            return;
+            ESP_LOGI(TAG, "registered: %s", resp);
+            return ESP_OK;
         }
-        ESP_LOGW(TAG, "not registered yet: %s", resp);
+        ESP_LOGW(TAG, "not registered: %s", resp);
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
-    ESP_LOGE(TAG, "network registration timeout");
+    ESP_LOGE(TAG, "registration timeout");
+
+    return ESP_ERR_TIMEOUT;
 }
 
 void app_main(void) {
-
-    gpio_set_direction(PIN_MDB_TX, GPIO_MODE_OUTPUT);
-    gpio_set_level(PIN_MDB_TX, 1);  // MDB idle = HIGH
-
-    mdb_rx_queue = xQueueCreate(16, sizeof(uint16_t));
-
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << PIN_MDB_RX),
-        .mode         = GPIO_MODE_INPUT,
-        .pull_up_en   = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_NEGEDGE,
-    };
-    gpio_config(&io_conf);
-
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(PIN_MDB_RX, mdb_rx_falling_isr, NULL);
-
-	//
-	gpio_set_direction(PIN_BUZZER_PWR, GPIO_MODE_OUTPUT);
+    gpio_set_direction(PIN_BUZZER_PWR, GPIO_MODE_OUTPUT);
 	gpio_set_level(PIN_BUZZER_PWR, 0);
 
 	//---------------- Strip LED configuration -----------------//
 	//----------------------------------------------------------//
     xLedEventGroup = xEventGroupCreate();
+    xInternetEventGroup = xEventGroupCreate();
 
     led_strip_config_t strip_config = {
         .strip_gpio_num = PIN_MDB_LED,
@@ -1443,7 +1356,7 @@ void app_main(void) {
 
     xTaskCreate(led_status_task, "led_status", 2048, NULL, 1, NULL);
 
-    xEventGroupSetBits(xLedEventGroup, BIT_EVT_TRIGGER);
+    xEventGroupSetBits(xLedEventGroup, BIT_STATUS_TRIGGER);
 
 	//---------------- UART1 - EVA DTS DEX/DDCMP ---------------//
 	//----------------------------------------------------------//
@@ -1459,12 +1372,12 @@ void app_main(void) {
 	uart_driver_install(UART_NUM_1, 256, 256, 0, NULL, 0);
 
     // ---
-    dexRingbuf = xRingbufferCreate(8 * 1024 /*8Kb*/, RINGBUF_TYPE_BYTEBUF);
+    dex_ringbuf = xRingbufferCreate(8 * 1024 /*8Kb*/, RINGBUF_TYPE_BYTEBUF);
 
     const uint64_t INTERVAL_12H_US = 12ULL * 60ULL * 60ULL * 1000000ULL; // 12h in microseconds
 
 	const esp_timer_create_args_t periodic_dex_timer_args = {
-		.callback   = &requestTelemetryData,
+		.callback   = &request_telemetry_data,
 		.name       = "task_dex_12h"
 	};
     esp_timer_handle_t periodic_dex_timer;
@@ -1480,13 +1393,14 @@ void app_main(void) {
 	esp_event_loop_create_default();
 
 	esp_netif_t *wifi_netif = esp_netif_create_default_wifi_sta();
-    esp_netif_set_route_prio(wifi_netif, 100);
+    esp_netif_set_route_prio(wifi_netif, 200);
 
 	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 	esp_wifi_init(&cfg);
 
 	esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL, NULL);
 	esp_event_handler_instance_register(IP_EVENT, ESP_EVENT_ANY_ID, ip_event_handler, NULL, NULL);
+	esp_event_handler_instance_register(NETIF_PPP_STATUS, ESP_EVENT_ANY_ID, ppp_event_handler, NULL, NULL);
 
 	esp_wifi_set_mode(WIFI_MODE_STA);
 	esp_wifi_start();
@@ -1498,7 +1412,6 @@ void app_main(void) {
 
     nvs_handle_t handle;
 	if (nvs_open("vmflow", NVS_READONLY, &handle) == ESP_OK) {
-
 	    size_t s_len = 0;
 	    if (nvs_get_str(handle, "passkey", NULL, &s_len) == ESP_OK) {
             nvs_get_str(handle, "passkey", my_passkey, &s_len);
@@ -1508,7 +1421,7 @@ void app_main(void) {
 
                 snprintf(myhost, sizeof(myhost), "%s.vmflow.xyz", my_subdomain);
 
-                xEventGroupSetBits(xLedEventGroup, BIT_EVT_PSSKEY | BIT_EVT_DOMAIN | BIT_EVT_TRIGGER);
+                xEventGroupSetBits(xLedEventGroup, BIT_STATUS_PSSKEY | BIT_STATUS_DOMAIN | BIT_STATUS_TRIGGER);
             }
         }
 
@@ -1516,19 +1429,102 @@ void app_main(void) {
 	}
 	ble_init(myhost, ble_event_handler, ble_pax_event_handler);
 
+    esp_timer_handle_t periodic_pax_timer;
+
 	const esp_timer_create_args_t periodic_pax_timer_args = {
 		.callback   = &ble_scan_start,
         .arg        = (void*) (uintptr_t) PAX_SCAN_DURATION_SEC,
 		.name       = "task_paxcounter"
 	};
     esp_timer_create(&periodic_pax_timer_args, &periodic_pax_timer);
+    esp_timer_start_periodic(periodic_pax_timer, PAX_SCAN_INTERVAL_US);
+
+    //------------------------ MAIN TASKS ----------------------//
+    //----------------------------------------------------------//
+    gpio_set_direction(PIN_MDB_TX, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_MDB_TX, 1);  // MDB idle = HIGH
+
+    mdb_rx_queue = xQueueCreate(16, sizeof(uint16_t));
+
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << PIN_MDB_RX),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_NEGEDGE,
+    };
+    gpio_config(&io_conf);
+
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(PIN_MDB_RX, mdb_rx_falling_isr, NULL);
+
+    mdb_session_queue = xQueueCreate(1 /*queue-length*/, sizeof(uint16_t));
+    xTaskCreate(mdb_cashless_task, "mdb_cashless_task", 8192, NULL, 1, NULL);
+
+    //------------------- SIM7080g STACK -----------------------//
+	//----------------------------------------------------------//
+    gpio_set_direction(PIN_SIM7080G_PWR, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_SIM7080G_PWR, 0);
+
+    esp_modem_dte_config_t dte_config = ESP_MODEM_DTE_DEFAULT_CONFIG();
+    dte_config.uart_config.port_num   = UART_NUM_2;
+    dte_config.uart_config.baud_rate  = 115200;
+    dte_config.uart_config.tx_io_num  = PIN_SIM7080G_TX;
+    dte_config.uart_config.rx_io_num  = PIN_SIM7080G_RX;
+    dte_config.uart_config.rts_io_num = -1;
+    dte_config.uart_config.cts_io_num = -1;
+
+    esp_modem_dce_config_t dce_config = ESP_MODEM_DCE_DEFAULT_CONFIG(CONFIG_SIM7080G_APN);
+
+    esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_PPP();
+    esp_netif_t *ppp_netif = esp_netif_new(&netif_cfg);
+    esp_netif_set_route_prio(ppp_netif, 100);
+
+    esp_modem_dce_t *dce = esp_modem_new_dev(ESP_MODEM_DCE_SIM7070, &dte_config, &dce_config, ppp_netif);
+    assert(dce);
+
+    /* try sync — modem may already be on (flash/soft-reset) */
+    esp_modem_set_mode(dce, ESP_MODEM_MODE_COMMAND);
+
+    esp_err_t ret = esp_modem_sync(dce);
+    if (ret != ESP_OK) {
+        sim7080g_pulse_power();
+
+        ret = esp_modem_sync(dce);
+        if (ret != ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            ret = esp_modem_sync(dce);
+        }
+    } else {
+        ESP_LOGI(TAG, "modem already on");
+
+        esp_modem_at(dce, "AT+CFUN=1,1", NULL, 3000);
+        vTaskDelay(pdMS_TO_TICKS(8000));
+    }
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "modem not found, skip PPP");
+    } else {
+        ESP_LOGI(TAG, "modem ok");
+
+        esp_modem_at(dce, "AT+CNMP=38", NULL, 3000);
+        esp_modem_at(dce, "AT+CMNB=" STRINGIFY(CONFIG_SIM7080G_CMNB), NULL, 3000);
+        esp_modem_at(dce, "AT+CEREG=1", NULL, 3000);
+
+        esp_err_t err = sim7080g_wait_registered(dce);
+        if (err == ESP_OK) {
+            err = esp_modem_set_mode(dce, ESP_MODEM_MODE_DATA);            
+        }
+    }
+
+    (void) xEventGroupWaitBits(xInternetEventGroup, BIT_PPP_GOT_IP | BIT_AT_GOT_IP, pdTRUE, pdFALSE, portMAX_DELAY );
 
     //-------------------------- MQTT --------------------------//
 	//----------------------------------------------------------//
 	char lwt_topic[64];
 	snprintf(lwt_topic, sizeof(lwt_topic), "domain.vmflow.xyz/%s/status", my_subdomain);
 
-	const esp_mqtt_client_config_t mqttCfg = {
+	const esp_mqtt_client_config_t mqtt_cfg = {
 		.broker.address.uri = "mqtt://mqtt.vmflow.xyz",
         .credentials = {
             /* MQTT connection uses username/password authentication ONLY for broker ACL control.
@@ -1556,72 +1552,13 @@ void app_main(void) {
 		.network.reconnect_timeout_ms = 10000,
 	};
 
-	mqttClient = esp_mqtt_client_init(&mqttCfg);
-	esp_mqtt_client_register_event(mqttClient, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+	mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
+	esp_mqtt_client_register_event(mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
 
-    //------------------------ MAIN TASKS ----------------------//
-	//----------------------------------------------------------//
-	mdb_session_queue = xQueueCreate(1 /*queue-length*/, sizeof(uint16_t));
-        xTaskCreate(mdb_cashless_task, "mdb_cashless_task", 8192, NULL, 1, NULL);
+    esp_mqtt_client_start(mqtt_client);
 
-    //------------------- SIM7080g STACK -----------------------//
-	//----------------------------------------------------------//
-    gpio_set_direction(PIN_SIM7080G_PWR, GPIO_MODE_OUTPUT);
-    gpio_set_level(PIN_SIM7080G_PWR, 0);
-
-    esp_modem_dte_config_t dte_config = ESP_MODEM_DTE_DEFAULT_CONFIG();
-    dte_config.uart_config.port_num   = UART_NUM_2;
-    dte_config.uart_config.baud_rate  = 115200;
-    dte_config.uart_config.tx_io_num  = PIN_SIM7080G_TX;
-    dte_config.uart_config.rx_io_num  = PIN_SIM7080G_RX;
-    dte_config.uart_config.rts_io_num = -1;
-    dte_config.uart_config.cts_io_num = -1;
-
-    esp_modem_dce_config_t dce_config = ESP_MODEM_DCE_DEFAULT_CONFIG(CONFIG_SIM7080G_APN);
-
-    esp_netif_config_t netif_cfg = ESP_NETIF_DEFAULT_PPP();
-    esp_netif_t *ppp_netif = esp_netif_new(&netif_cfg);
-    esp_netif_set_route_prio(ppp_netif, 200);
-
-    esp_modem_dce_t *dce = esp_modem_new_dev(ESP_MODEM_DCE_SIM7000, &dte_config, &dce_config, ppp_netif);
-    assert(dce);
-
-    /* try sync — modem may already be on (flash/soft-reset) */
-    esp_err_t ret = esp_modem_sync(dce);
-    if (ret != ESP_OK) {
-        /* may be stuck in PPP mode from previous session — escape first */
-        esp_modem_set_mode(dce, ESP_MODEM_MODE_COMMAND);
-        vTaskDelay(pdMS_TO_TICKS(1500));
-        ret = esp_modem_sync(dce);
-    }
-
-    if (ret != ESP_OK) {
-        /* truly off — pulse to power on */
-        sim7080g_pulse_power();
-        ret = esp_modem_sync(dce);
-        if (ret != ESP_OK) {
-            vTaskDelay(pdMS_TO_TICKS(2000));
-            ret = esp_modem_sync(dce);
-        }
-    } else {
-        ESP_LOGI(TAG, "modem already on");
-    }
-
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "no modem detected, skipping PPP");
-    } else {
-        ESP_LOGI(TAG, "modem detected");
-        esp_modem_at(dce, "AT+CNMP=38", NULL, 3000);
-        esp_modem_at(dce, "AT+CMNB=" STRINGIFY(CONFIG_SIM7080G_CMNB), NULL, 3000);
-        esp_modem_at(dce, "AT+CEREG=1", NULL, 3000);
-        sim7080g_wait_registered(dce);
-
-        int rssi = 0, ber = 0;
-        if (esp_modem_get_signal_quality(dce, &rssi, &ber) == ESP_OK) {
-            ESP_LOGI(TAG, "RSSI: %d dBm, BER: %d", (rssi == 99 ? 0 : -113 + 2 * rssi), ber);
-        }
-
-        ESP_LOGI(TAG, "setting data mode...");
-        esp_modem_set_mode(dce, ESP_MODEM_MODE_DATA);
-    }
+    // sntp
+    esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_init();
 }

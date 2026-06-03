@@ -26,6 +26,8 @@ The project aims to provide a modern, open, and extensible platform for vending 
 - **VMflow Runner**: a hidden arcade game easter egg built into the dashboard — find it yourself 🕹️
 - **PAX Counter**: detects nearby mobile devices and periodically reports anonymized presence metrics to estimate foot traffic around the vending machine. This enables heatmaps, peak-hour analysis, and location performance insights.
 
+> The MDB vending stack also has an [Apache NuttX](https://nuttx.apache.org/) port — `vmc`, `cashless` and `dex` as RTOS builtin apps. See [vmflow-nuttx-apps](https://github.com/nodestark/vmflow-nuttx-apps).
+
 # Getting Started
 
 ### 1. Flash the Firmware
@@ -35,9 +37,9 @@ The project aims to provide a modern, open, and extensible platform for vending 
 👉 Advanced (for development): ESP-IDF
 
 ```bash
-# Clone the repository
-git clone https://github.com/nodestark/mdb-esp32-cashless
-cd mdb-slave-esp32s3
+# Clone the repository (with submodules — pulls in the VMC project)
+git clone --recurse-submodules https://github.com/nodestark/mdb-esp32-cashless
+cd mdb-esp32-cashless/mdb-slave-esp32s3
 
 idf.py flash monitor
 ```
